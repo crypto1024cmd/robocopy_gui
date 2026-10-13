@@ -12,6 +12,14 @@
 
 技术栈：Tauri v2（Rust 后端 + WebView 前端），前端为 Vite + React + TypeScript + Tailwind CSS。
 
+## 文档
+
+- 产品文档（面向使用者）：[`docs/README.md`](docs/README.md)
+  - [用户指南](docs/user-guide.md)：界面、任务编辑、复制参数、校验、日志、退出码、快捷键
+  - [常见问题与排障](docs/faq.md)
+- 协作与分层约定（面向 AI/协作者）：[`AGENTS.md`](AGENTS.md)
+- 构建/打包/测试命令：见本文下方各节
+
 ## 目录结构
 
 ```
