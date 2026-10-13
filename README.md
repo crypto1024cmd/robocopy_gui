@@ -46,15 +46,6 @@
 - Node.js 18+ / npm
 - Windows（复制依赖系统 robocopy.exe）
 
-### 工具链说明（重要）
-
-- `src-tauri/Cargo.toml` 的 `crate-type` **只保留 `rlib`**，切勿加回
-  `staticlib` / `cdylib`：那两个是移动端产物，在 `x86_64-pc-windows-gnu`
-  （MinGW）下链接 cdylib 会因导出的符号序号超过 PE 的 16 位上限而失败：
-  `ld.exe: error: export ordinal too large`。
-- MinGW（GNU）与 MSVC 工具链均可构建桌面版；如后续需要出移动端，
-  请在 MSVC / macOS 环境下单独配置 crate-type。
-
 ## 构建与运行
 
 ### 一键脚本（推荐）

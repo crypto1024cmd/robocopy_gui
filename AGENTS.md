@@ -98,7 +98,10 @@ Agent 在采取任何可能影响这些约定的动作前，请先通读一遍�
 - 子进程用 `std::process::Command` + `creation_flags(0x08000000)`（CREATE_NO_WINDOW），
   stdout 按 8KB 增量解码（OEM 代码页，见 `encoding_rs`）。不要用阻塞式一次性读取。
 - **不要** 修改 `src-tauri/Cargo.toml` 的 `crate-type`：只保留 `rlib`。
-  加回 `staticlib` / `cdylib` 会在 MinGW 下因导出序号溢出导致链接失败。
+  加回 `staticlib` / `cdylib`（移动端产物）会在 MinGW 下因导出的符号序号超过 PE 的
+  16 位上限而链接失败：`ld.exe: error: export ordinal too large`。
+  MinGW（GNU）与 MSVC 工具链均可构建桌面版；如后续要出移动端，请在 MSVC / macOS
+  环境下单独配置 crate-type。
 
 ## 5. 日志与可观测性
 
