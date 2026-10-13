@@ -1,0 +1,24 @@
+[package]
+name = "robocopy-gui"
+description = "RoboCopy 批量搬运 - Tauri 桌面应用"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+# 桌面端只需要 rlib（供 bin 依赖）。
+# 不要加回 staticlib / cdylib：那是移动端（iOS/Android）用的，
+# 在 x86_64-pc-windows-gnu(MinGW) 下链接 cdylib 会因导出序号溢出
+# 报 `ld.exe: error: export ordinal too large`。
+name = "robocopy_gui_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+rc-core = { path = "../crates/rc-core" }

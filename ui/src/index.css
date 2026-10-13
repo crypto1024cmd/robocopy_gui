@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* 浅色工作区 */
+    --background: 210 40% 98%; /* #F8FAFC */
+    --foreground: 222 47% 11%; /* #0F172A */
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 221 83% 53%; /* #2563EB */
+    --primary-foreground: 210 40% 98%;
+    --secondary: 214 32% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 214 32% 96%;
+    --muted-foreground: 215 16% 47%; /* #64748B */
+    --accent: 214 32% 93%;
+    --accent-foreground: 221 83% 41%;
+    --destructive: 0 84% 60%; /* #EF4444 */
+    --destructive-foreground: 210 40% 98%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 221 83% 53%;
+    --radius: 0.5rem;
+
+    /* 功能色（状态徽标 / 校验结果） */
+    --success: 160 84% 39%; /* #10B981 */
+    --warning: 38 92% 50%; /* #F59E0B */
+    --info: 189 94% 43%; /* #06B6D4 */
+
+    /* 深色顶栏与日志控制台 */
+    --topbar: 222 47% 11%; /* #0F172A */
+    --console: 222 47% 8%; /* #0B1220 */
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+    margin: 0;
+  }
+}
+
+@layer utilities {
+  /* 深色控制台滚动条 */
+  .console-scroll::-webkit-scrollbar {
+    width: 8px;
+  }
+  .console-scroll::-webkit-scrollbar-thumb {
+    background: rgb(71 85 105 / 0.6);
+    border-radius: 4px;
+  }
+  .console-scroll::-webkit-scrollbar-thumb:hover {
+    background: rgb(100 116 139 / 0.8);
+  }
+  .console-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}

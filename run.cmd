@@ -1,0 +1,17 @@
+@echo off
+rem ============================================================
+rem  RoboCopy GUI - start wrapper (ASCII-safe, double-clickable)
+rem  - prefers PowerShell 7 (pwsh), falls back to Windows PowerShell 5.1
+rem  - auto-fixes UTF-8 BOM on run.ps1 so PS 5.1 reads Chinese text correctly
+rem  - passes through arguments, e.g.:  run.cmd -Release / run.cmd -Install
+rem ============================================================
+setlocal
+cd /d "%~dp0"
+
+set "PSH=powershell"
+where pwsh >nul 2>nul
+if %errorlevel%==0 set "PSH=pwsh"
+
+%PSH% -NoProfile -ExecutionPolicy Bypass -Command "$p = Join-Path $PWD 'run.ps1'; $b = [IO.File]::ReadAllBytes($p); if ($b.Length -lt 3 -or $b[0] -ne 0xEF) { [IO.File]::WriteAllText($p, [Text.Encoding]::UTF8.GetString($b), (New-Object Text.UTF8Encoding($true))); Write-Host '[fix] added UTF-8 BOM to run.ps1' }; & $p %*"
+set "RC=%errorlevel%"
+endlocal & exit /b %RC%

@@ -1,0 +1,18 @@
+# Rust 构建产物
+target/
+src-tauri/gen/
+
+# 前端构建产物与依赖
+node_modules/
+dist/
+*.local
+
+# 运行日志（每次执行生成，完整内容落盘）
+logs/
+*.log
+
+# IDE / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
