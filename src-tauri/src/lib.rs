@@ -42,6 +42,7 @@ pub fn run() {
             commands::running_count,
             commands::preview_command,
             commands::pick_folder,
+            commands::pick_file,
             commands::set_poll_interval,
             commands::list_drives,
             commands::check_paths,

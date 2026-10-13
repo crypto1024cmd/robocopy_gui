@@ -309,6 +309,91 @@ pub fn is_subpath(child: &str, parent: &str) -> bool {
     c.starts_with(&p)
 }
 
+// ---------------------------------------------------------------------- 源形态
+
+/// 源路径的形态：目录 / 单个文件 / 不存在。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    Directory,
+    /// 单个文件（只复制这一个文件）
+    File,
+    Missing,
+}
+
+/// 判断源路径是目录、还是单个文件、还是不存在。
+///
+/// 接受「目录」或「单个文件」两种源；两者之外的既有路径一律视为不存在。
+pub fn source_kind(path: &str) -> SourceKind {
+    if path.trim().is_empty() {
+        return SourceKind::Missing;
+    }
+    let binding = long_path(path);
+    let p = std::path::Path::new(&binding);
+    if p.is_dir() {
+        SourceKind::Directory
+    } else if p.is_file() {
+        SourceKind::File
+    } else {
+        SourceKind::Missing
+    }
+}
+
+/// 源为「单个文件」时拆成 `(父目录, 文件名)`；目录或不存在时返回 `None`。
+///
+/// robocopy 只能以目录为复制根，因此单文件复制 = 用父目录作源 + 文件名作过滤条件；
+/// 目标始终按目录处理，文件被复制进去后文件名不变。
+pub fn split_file_source(source: &str) -> Option<(String, String)> {
+    let abs = abspath(source);
+    let binding = long_path(&abs);
+    let p = std::path::Path::new(&binding);
+    if !p.is_file() {
+        return None;
+    }
+    let name = p.file_name()?.to_string_lossy().into_owned();
+    if name.is_empty() {
+        return None;
+    }
+    let parent = p.parent()?.to_string_lossy().into_owned();
+    Some((parent, name))
+}
+
+/// 取路径的末级名称（纯词法，不触碰文件系统）；盘符根与空路径返回 `""`。
+pub fn path_basename(path: &str) -> String {
+    let owned = strip_long_owned(path);
+    let trimmed = owned.trim_end_matches(['\\', '/']);
+    if trimmed.is_empty() || trimmed.ends_with(':') {
+        return String::new();
+    }
+    trimmed
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// 计算「文件实际落盘的目标根」——命令拼装、进度轮询、复制后校验都必须用它，
+/// 否则会盯错目录（命令写到子目录、轮询却在父目录找）。
+///
+/// - 目录源：`<目标目录>\<源目录名>` —— 把源目录**整体**建到目标目录里；
+/// - 单文件源：`<目标目录>` 本身（文件直接放进目标目录，文件名不变）；
+/// - 源无目录名（如 `D:\` 盘符根）：回落到 `<目标目录>`。
+pub fn effective_dest_root(source: &str, dest: &str) -> String {
+    if split_file_source(source).is_some() {
+        return dest.to_string();
+    }
+    let name = path_basename(source);
+    let dest_clean = strip_long_owned(dest)
+        .trim_end_matches(['\\', '/'])
+        .to_string();
+    if name.is_empty() {
+        return dest_clean;
+    }
+    if dest_clean.is_empty() {
+        return name;
+    }
+    format!("{}\\{}", dest_clean, name)
+}
+
 /// src 与 dst 的危险关系。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -323,7 +408,7 @@ pub enum PathRelation {
     SrcInDest,
     /// 路径为空
     Empty,
-    /// 源目录不存在
+    /// 源路径不存在（既不是文件夹也不是文件）
     Missing,
 }
 
@@ -331,11 +416,11 @@ impl PathRelation {
     pub fn message(self) -> &'static str {
         match self {
             PathRelation::Ok => "",
-            PathRelation::Empty => "源目录与目标目录都必须填写",
-            PathRelation::Same => "源目录与目标目录不能相同",
+            PathRelation::Empty => "源路径与目标目录都必须填写",
+            PathRelation::Same => "源路径与目标目录不能相同",
             PathRelation::DestInSrc => "目标目录位于源目录内部，会导致自我递归复制，已阻止",
-            PathRelation::SrcInDest => "源目录位于目标目录内部，可能造成数据覆盖，已阻止",
-            PathRelation::Missing => "源目录不存在或不是文件夹",
+            PathRelation::SrcInDest => "源位于目标目录内部，可能造成数据覆盖，已阻止",
+            PathRelation::Missing => "源路径不存在（既不是文件夹也不是文件）",
         }
     }
 
@@ -344,7 +429,7 @@ impl PathRelation {
     }
 }
 
-/// 返回 src 与 dst 的危险关系。
+/// 返回 src 与 dst 的危险关系。源既可以是目录，也可以是单个文件。
 pub fn path_relation(src: &str, dst: &str) -> PathRelation {
     if src.trim().is_empty() || dst.trim().is_empty() {
         return PathRelation::Empty;
@@ -356,9 +441,10 @@ pub fn path_relation(src: &str, dst: &str) -> PathRelation {
         return PathRelation::DestInSrc;
     }
     if is_subpath(src, dst) {
+        // 源文件已经位于目标目录内时，复制等于自我覆盖，必须阻止
         return PathRelation::SrcInDest;
     }
-    if !std::path::Path::new(src).is_dir() {
+    if source_kind(src) == SourceKind::Missing {
         return PathRelation::Missing;
     }
     PathRelation::Ok
@@ -590,6 +676,83 @@ mod tests {
         );
         assert_eq!(path_relation(&s, "D:\\dst"), PathRelation::Ok);
         std::fs::remove_dir_all(&src).ok();
+    }
+
+    #[test]
+    fn path_relation_accepts_file_source() {
+        let base = std::env::temp_dir();
+        let dir = base.join(format!("rc_test_file_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).ok();
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "x").ok();
+        let f = file.to_string_lossy().into_owned();
+        let d = dir.to_string_lossy().into_owned();
+
+        // 文件源 + 外部目标：合法
+        assert_eq!(path_relation(&f, "D:\\dst"), PathRelation::Ok);
+        // 文件已经位于目标目录内：会自我覆盖，必须阻止
+        assert_eq!(path_relation(&f, &d), PathRelation::SrcInDest);
+        // 不存在的文件仍判 Missing
+        assert_eq!(
+            path_relation(&format!("{}\\nope.txt", d), "D:\\dst"),
+            PathRelation::Missing
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn split_file_source_only_for_files() {
+        let base = std::env::temp_dir();
+        let dir = base.join(format!("rc_split_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).ok();
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "hi").ok();
+
+        let (parent, name) = split_file_source(&file.to_string_lossy()).unwrap();
+        assert_eq!(name, "a.txt");
+        assert!(is_same_path(&parent, &dir.to_string_lossy()));
+        // 目录与不存在的路径都不是单文件源
+        assert!(split_file_source(&dir.to_string_lossy()).is_none());
+        assert!(split_file_source(&format!("{}\\nope.txt", dir.to_string_lossy())).is_none());
+        assert_eq!(source_kind(&file.to_string_lossy()), SourceKind::File);
+        assert_eq!(source_kind(&dir.to_string_lossy()), SourceKind::Directory);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn path_basename_and_effective_dest() {
+        assert_eq!(path_basename("D:\\a\\b"), "b");
+        assert_eq!(path_basename("D:\\a\\b\\"), "b");
+        assert_eq!(path_basename("D:\\"), "");
+        assert_eq!(path_basename(""), "");
+
+        // 目录源：整体建到目标下，目标端出现同名子目录
+        assert_eq!(
+            effective_dest_root("D:\\photos\\2024", "E:\\backup"),
+            "E:\\backup\\2024"
+        );
+        assert_eq!(
+            effective_dest_root("D:\\photos\\2024\\", "E:\\backup\\"),
+            "E:\\backup\\2024"
+        );
+        assert_eq!(effective_dest_root("D:\\photos", "E:\\"), "E:\\photos");
+        // 源是盘符根（无目录名）：直接落目标目录
+        assert_eq!(effective_dest_root("D:\\", "E:\\backup"), "E:\\backup");
+
+        // 单文件源：直接放进目标目录，不新建子目录
+        let base = std::env::temp_dir();
+        let dir = base.join(format!("rc_eff_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).ok();
+        let f = dir.join("a.txt");
+        std::fs::write(&f, "x").ok();
+        assert_eq!(
+            effective_dest_root(&f.to_string_lossy(), "E:\\backup"),
+            "E:\\backup"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -35,6 +35,7 @@ export const api = {
   diskFreeHint: (srcBytes: number, dest: string) =>
     invoke<DiskFreeHint>("disk_free_hint", { srcBytes, dest }),
   pickFolder: () => invoke<string | null>("pick_folder"),
+  pickFile: () => invoke<string | null>("pick_file"),
   openPath: (path: string) => invoke<boolean>("open_path", { path }),
   readLogTail: (path: string) => invoke<string>("read_log_tail", { path }),
   notify: (title: string, body: string) => invoke<void>("notify", { title, body }),

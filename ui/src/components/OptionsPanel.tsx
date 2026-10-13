@@ -7,6 +7,8 @@ import type { CopyOptions, HashAlgo, VerifyLevel } from "../types";
 export interface OptionsPanelProps {
   value: CopyOptions;
   onChange: (options: CopyOptions) => void;
+  /** 源为单个文件时禁用镜像 /MIR（单文件没有镜像语义） */
+  mirrorDisabled?: boolean;
 }
 
 /** 多段切换按钮。 */
@@ -16,25 +18,32 @@ function Segmented<T extends string>({
   onChange,
 }: {
   value: T;
-  options: { value: T; label: string }[];
+  options: { value: T; label: string; disabled?: boolean }[];
   onChange: (v: T) => void;
 }) {
   return (
     <div className="inline-flex overflow-hidden rounded-md border border-[#CBD5E1]">
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          onClick={() => onChange(o.value)}
-          className={`h-[26px] border-l px-3 text-xs first:border-l-0 transition-colors ${
-            value === o.value
-              ? "bg-[#2563EB] text-white"
-              : "bg-surface text-foreground hover:bg-surfaceAlt"
-          }`}
-        >
-          {o.label}
-        </button>
-      ))}
+      {options.map((o) => {
+        const active = value === o.value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            disabled={o.disabled}
+            onClick={() => onChange(o.value)}
+            title={o.disabled ? "该选项当前不可用" : undefined}
+            className={`h-[26px] border-l px-3 text-xs first:border-l-0 transition-colors ${
+              o.disabled
+                ? "cursor-not-allowed bg-surface text-slate-300"
+                : active
+                  ? "bg-[#2563EB] text-white"
+                  : "bg-surface text-foreground hover:bg-surfaceAlt"
+            }`}
+          >
+            {o.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -51,7 +60,7 @@ const HASH_LABELS: Record<HashAlgo, string> = {
   sha256: "SHA256（最安全）",
 };
 
-export function OptionsPanel({ value, onChange }: OptionsPanelProps) {
+export function OptionsPanel({ value, onChange, mirrorDisabled = false }: OptionsPanelProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const patch = (p: Partial<CopyOptions>) => onChange({ ...value, ...p });
 
@@ -71,10 +80,13 @@ export function OptionsPanel({ value, onChange }: OptionsPanelProps) {
           value={value.mirror ? "mir" : "e"}
           onChange={(v) => patch({ mirror: v === "mir" })}
           options={[
-            { value: "e", label: "普通 /E" },
-            { value: "mir", label: "镜像 /MIR" },
+            { value: "e", label: mirrorDisabled ? "单文件" : "普通 /E" },
+            { value: "mir", label: "镜像 /MIR", disabled: mirrorDisabled },
           ]}
         />
+        {mirrorDisabled && (
+          <span className="text-[11px] text-[#94A3B8]">源为单个文件，已禁用镜像 /MIR</span>
+        )}
       </div>
 
       {/* 线程数 + 预设 */}

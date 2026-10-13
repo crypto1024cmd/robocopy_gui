@@ -15,7 +15,7 @@
 //! - 优先扫描 robocopy 输出中刚出现过的目录（hint），其余目录按固定预算轮转；
 //! - 已全部完成的目录移出轮询集合。
 
-use crate::winfs::{abspath, long_path, norm_for_compare};
+use crate::winfs::{abspath, long_path, norm_for_compare, split_file_source};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -79,6 +79,9 @@ fn _record_skip(result: &mut ScanResult, message: String) {
 
 /// 递归扫描源目录，返回文件清单与总字节数。
 ///
+/// 源也可以是**单个文件**：此时清单只含这一个文件，`root` 归一到其父目录
+/// （robocopy 以父目录为复制根 + 文件名作过滤条件）。
+///
 /// `progress_cb(已发现文件数, 已发现总字节)` 会被节流调用，用于界面提示。
 /// `excludes` 中的目录（绝对路径）会被整棵跳过（例如本程序自己的日志目录）。
 pub fn scan_source(
@@ -93,6 +96,33 @@ pub fn scan_source(
         root: root_abs.clone(),
         ..Default::default()
     };
+
+    // 单文件源：只登记这一个文件，root 归一到父目录
+    if let Some((parent, name)) = split_file_source(&root_abs) {
+        result.root = parent;
+        result.dirs.push(String::new());
+        match std::fs::metadata(long_path(&root_abs)) {
+            Ok(stat) => {
+                let size = stat.len();
+                result.files.insert(
+                    name.clone(),
+                    SourceEntry {
+                        rel: name.clone(),
+                        size,
+                        mtime_ns: mtime_ns(&stat),
+                    },
+                );
+                result.total_bytes = size;
+            }
+            Err(exc) => _record_skip(&mut result, format!("{}  ({})", name, exc)),
+        }
+        result.file_count = result.files.len();
+        if let Some(cb) = progress_cb.as_mut() {
+            cb(result.file_count, result.total_bytes);
+        }
+        return result;
+    }
+
     let exclude_norms: Vec<String> = excludes
         .iter()
         .map(|e| norm_for_compare(e))
@@ -641,6 +671,25 @@ mod tests {
         );
         assert_eq!(result.file_count, 1);
         assert_eq!(result.total_bytes, 2);
+        fs::remove_dir_all(&src).ok();
+    }
+
+    #[test]
+    fn scan_source_single_file() {
+        let src = temp_dir_with("onefile");
+        let file = src.join("only.txt");
+        write_file(&file, "0123456789");
+
+        let result = scan_source(&file.to_string_lossy(), None, &[], None, 0.3);
+        assert_eq!(result.file_count, 1);
+        assert_eq!(result.total_bytes, 10);
+        assert!(result.files.contains_key("only.txt"));
+        assert_eq!(result.dirs, vec![String::new()]);
+        // root 归一到父目录，供 robocopy 以父目录为复制根
+        assert!(crate::winfs::is_same_path(
+            &result.root,
+            &src.to_string_lossy()
+        ));
         fs::remove_dir_all(&src).ok();
     }
 

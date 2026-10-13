@@ -87,17 +87,19 @@ export type PathRelation =
 
 export const RELATION_MESSAGES: Record<PathRelation, string> = {
   ok: "",
-  empty: "源目录与目标目录都必须填写",
-  same: "源目录与目标目录不能相同",
+  empty: "源路径与目标目录都必须填写",
+  same: "源路径与目标目录不能相同",
   dest_in_src: "目标目录位于源目录内部，会导致自我递归复制，已阻止",
-  src_in_dest: "源目录位于目标目录内部，可能造成数据覆盖，已阻止",
-  missing: "源目录不存在或不是文件夹",
+  src_in_dest: "源位于目标目录内部，可能造成数据覆盖，已阻止",
+  missing: "源路径不存在（既不是文件夹也不是文件）",
 };
 
 export interface ScanEstimate {
   files: number;
   dirs: number;
   total_bytes: number;
+  /** 源是否为单个文件（据此禁用 /MIR 并调整文案） */
+  is_file: boolean;
 }
 
 export interface DiskFreeHint {

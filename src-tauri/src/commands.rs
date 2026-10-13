@@ -16,6 +16,8 @@ pub struct ScanEstimate {
     pub files: usize,
     pub dirs: usize,
     pub total_bytes: u64,
+    /// 源是否为单个文件（前端据此禁用 /MIR 并调整文案）
+    pub is_file: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -89,7 +91,7 @@ pub fn set_poll_interval(state: State<'_, AppState>, seconds: f64) {
     state.engine.set_poll_interval(seconds);
 }
 
-/// 系统目录选择对话框（任务编辑器「浏览…」按钮）。
+/// 系统目录选择对话框（任务编辑器「浏览目录…」按钮）。
 #[tauri::command]
 pub async fn pick_folder(app: tauri::AppHandle) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
@@ -100,6 +102,19 @@ pub async fn pick_folder(app: tauri::AppHandle) -> Option<String> {
             .file()
             .set_title("选择文件夹")
             .blocking_pick_folder()
+    })
+    .await
+    .ok()??;
+    Some(picked.to_string())
+}
+
+/// 系统文件选择对话框（源支持「单个文件」时使用，任务编辑器「浏览文件…」按钮）。
+#[tauri::command]
+pub async fn pick_file(app: tauri::AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let handle = app.clone();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        handle.dialog().file().set_title("选择文件").blocking_pick_file()
     })
     .await
     .ok()??;
@@ -123,16 +138,21 @@ pub fn check_paths(src: String, dst: String) -> winfs::PathRelation {
     winfs::path_relation(&src, &dst)
 }
 
-/// 源目录大小估算（任务编辑器）。重 I/O → async，跑在独立线程池。
+/// 源路径大小估算（任务编辑器）。源可以是目录，也可以是单个文件。
+/// 重 I/O → async，跑在独立线程池。
 #[tauri::command]
 pub async fn scan_estimate(src: String) -> Result<ScanEstimate, String> {
-    let scan = tauri::async_runtime::spawn_blocking(move || scan_source(&src, None, &[], None, 0.3))
-        .await
-        .map_err(|e| e.to_string())?;
+    let (scan, is_file) = tauri::async_runtime::spawn_blocking(move || {
+        let is_file = winfs::source_kind(&src) == winfs::SourceKind::File;
+        (scan_source(&src, None, &[], None, 0.3), is_file)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(ScanEstimate {
         files: scan.file_count,
-        dirs: scan.dirs.len(),
+        dirs: if is_file { 0 } else { scan.dirs.len() },
         total_bytes: scan.total_bytes,
+        is_file,
     })
 }
 

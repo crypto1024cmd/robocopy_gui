@@ -16,7 +16,9 @@ use crate::models::{now_secs, CopyTask, TaskEvent, TaskStatus, VerifyLevel, MAX_
 use crate::robocopy;
 use crate::scanner::{scan_source, TargetProgressTracker};
 use crate::verify;
-use crate::winfs::{human_bytes, human_duration, robocopy_path};
+use crate::winfs::{
+    effective_dest_root, human_bytes, human_duration, robocopy_path, source_kind, SourceKind,
+};
 use crate::{LOG_EMIT_INTERVAL_MS, LOG_TAIL_LINES};
 use regex::Regex;
 use std::collections::{HashMap, VecDeque};
@@ -522,8 +524,15 @@ impl CopyEngine {
         self.log(task_id, &format!("任务「{}」开始：{}", display_name, route), true, false);
         self.log(task_id, &format!("复制参数：{}", summary), true, false);
 
-        if !std::path::Path::new(&source).is_dir() {
-            return Err(format!("源目录不存在或不是文件夹：{}", source));
+        let src_kind = source_kind(&source);
+        if src_kind == SourceKind::Missing {
+            return Err(format!("源不存在或不可访问：{}", source));
+        }
+        let single_file = src_kind == SourceKind::File;
+        // 单文件没有镜像语义：自动关闭，保证界面摘要与实际命令行一致
+        if single_file && task.lock().unwrap().options.mirror {
+            self.edit(task, |t| t.options.mirror = false);
+            self.log(task_id, "源为单个文件，已自动关闭镜像 /MIR", true, false);
         }
 
         // ---- 1. 扫描源目录，建立清单 ----
@@ -564,30 +573,50 @@ impl CopyEngine {
                 false,
             );
         }
-        self.log(
-            task_id,
-            &format!(
-                "源目录共 {} 个文件 / {} 个目录，合计 {}",
-                scan.file_count,
-                scan.dirs.len(),
-                human_bytes(scan.total_bytes as f64)
-            ),
-            true,
-            false,
-        );
+        if single_file {
+            self.log(
+                task_id,
+                &format!("源为单个文件，合计 {}", human_bytes(scan.total_bytes as f64)),
+                true,
+                false,
+            );
+        } else {
+            self.log(
+                task_id,
+                &format!(
+                    "源目录共 {} 个文件 / {} 个目录，合计 {}",
+                    scan.file_count,
+                    scan.dirs.len(),
+                    human_bytes(scan.total_bytes as f64)
+                ),
+                true,
+                false,
+            );
+        }
         self.emit(task);
 
         // ---- 2. 目标目录基线：算出已经是最新的部分，并精简后续轮询范围 ----
+        // 目录源会整体建到目标目录下（<目标>\<源目录名>），单文件源直接落目标目录。
+        // 命令拼装 / 进度轮询 / 复制后校验都必须盯同一个「有效目标根」。
         let dest = task.lock().unwrap().dest.clone();
-        if !std::path::Path::new(&dest).is_dir() {
-            if let Err(exc) = std::fs::create_dir_all(&dest) {
-                return Err(format!("无法创建目标目录 {}：{}", dest, exc));
+        let dest_root = effective_dest_root(&source, &dest);
+        if dest_root != dest {
+            self.log(
+                task_id,
+                &format!("目标端将创建子目录：{}", dest_root),
+                true,
+                false,
+            );
+        }
+        if !std::path::Path::new(&dest_root).is_dir() {
+            if let Err(exc) = std::fs::create_dir_all(&dest_root) {
+                return Err(format!("无法创建目标目录 {}：{}", dest_root, exc));
             }
         }
         self.edit(task, |t| t.phase_text = "正在比对目标目录…".to_string());
         self.emit(task);
 
-        let tracker = Arc::new(TargetProgressTracker::new(&scan, &dest));
+        let tracker = Arc::new(TargetProgressTracker::new(&scan, &dest_root));
         tracker.build_baseline(None);
         self.edit(task, |t| {
             t.copied_bytes = tracker.done_bytes();
@@ -643,6 +672,8 @@ impl CopyEngine {
         self.edit(task, |t| {
             t.phase_text = if dry_run {
                 "试运行：仅列出将要复制的文件，不写入磁盘".to_string()
+            } else if single_file {
+                "正在复制文件".to_string()
             } else {
                 "多线程复制中".to_string()
             };
@@ -813,7 +844,7 @@ impl CopyEngine {
         let algo = task.lock().unwrap().options.hash_algo;
         let result = verify::verify_task(
             &scan,
-            &dest,
+            &dest_root,
             level,
             algo,
             Some(&mut on_verify),
@@ -1153,6 +1184,69 @@ mod tests {
 
     #[test]
     #[cfg(windows)]
+    fn engine_copies_single_file_source() {
+        let base = std::env::temp_dir();
+        let tag = format!("rc_file_{}", std::process::id());
+        let src = base.join(format!("{}_src", tag));
+        let dst = base.join(format!("{}_dst", tag));
+        let logs = base.join(format!("{}_logs", tag));
+        for p in [&src, &dst, &logs] {
+            let _ = std::fs::remove_dir_all(p);
+        }
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("only.txt"), "hello-file").unwrap();
+        let file_path = src.join("only.txt");
+
+        let (tx, rx) = mpsc::channel::<TaskEvent>();
+        let engine = CopyEngine::new(tx, &logs.to_string_lossy(), 1.0);
+
+        let mut task = CopyTask::new(
+            file_path.to_string_lossy().into_owned(),
+            dst.to_string_lossy().into_owned(),
+        );
+        task.options = CopyOptions {
+            // 故意勾上镜像：单文件源必须被自动关闭
+            mirror: true,
+            verify_level: VerifyLevel::Quick,
+            ..Default::default()
+        };
+        let task_id = engine.add_task(task).task_id;
+
+        assert!(engine.start(1));
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut saw_all_done = false;
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(TaskEvent::AllDone) => {
+                    saw_all_done = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        engine.shutdown();
+        assert!(saw_all_done, "应在超时前收到 all_done 事件");
+
+        let t = engine.get(&task_id).unwrap();
+        assert_eq!(t.status, TaskStatus::Done, "任务应成功，错误：{}", t.error);
+        assert!(!t.options.mirror, "单文件源应自动关闭 /MIR");
+        assert_eq!(t.total_files, 1);
+        assert_eq!(t.verify_checked, 1);
+        assert_eq!(t.verify_passed, 1);
+        assert_eq!(
+            std::fs::read_to_string(dst.join("only.txt")).unwrap(),
+            "hello-file"
+        );
+
+        for p in [&src, &dst, &logs] {
+            let _ = std::fs::remove_dir_all(p);
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
     fn engine_end_to_end_copy_with_quick_verify() {
         let base = std::env::temp_dir();
         let tag = format!("rc_eng_{}", std::process::id());
@@ -1232,13 +1326,11 @@ mod tests {
         assert!(log_content.contains("robocopy 统计"));
         assert!(log_content.contains("校验通过"));
 
-        // 目标端确实复制成功
+        // 目标端确实复制成功：目录源整体建到目标下的同名子目录里
+        let out = dst.join(format!("{}_src", tag));
+        assert_eq!(std::fs::read_to_string(out.join("a.txt")).unwrap(), "alpha");
         assert_eq!(
-            std::fs::read_to_string(dst.join("a.txt")).unwrap(),
-            "alpha"
-        );
-        assert_eq!(
-            std::fs::read_to_string(dst.join("sub\\b.txt")).unwrap(),
+            std::fs::read_to_string(out.join("sub\\b.txt")).unwrap(),
             "bravo"
         );
 

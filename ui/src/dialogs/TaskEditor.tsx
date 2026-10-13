@@ -14,6 +14,7 @@ import {
   type CopyOptions,
   type DriveInfo,
   type PathRelation,
+  type ScanEstimate,
   type TaskSnapshot,
 } from "../types";
 
@@ -36,7 +37,7 @@ export function TaskEditor({ initial, defaultOptions, onClose, onSaved }: TaskEd
     initial?.options ?? defaultOptions,
   );
   const [relation, setRelation] = useState<PathRelation | null>(null);
-  const [estimate, setEstimate] = useState<{ files: number; dirs: number; total_bytes: number } | null>(null);
+  const [estimate, setEstimate] = useState<ScanEstimate | null>(null);
   const [diskHint, setDiskHint] = useState<{ ok: boolean; text: string } | null>(null);
   const [drives, setDrives] = useState<DriveInfo[]>([]);
   const [command, setCommand] = useState("");
@@ -50,6 +51,24 @@ export function TaskEditor({ initial, defaultOptions, onClose, onSaved }: TaskEd
     () => makeEmptyTask({ source, dest, name, options }),
     [source, dest, name, options],
   );
+
+  /** 源是否为单个文件：禁用 /MIR 并调整文案 */
+  const sourceIsFile = estimate?.is_file ?? false;
+
+  /** 源目录名（词法级）：目录源会在目标目录下新建同名子目录 */
+  const sourceBase = useMemo(() => {
+    const t = source.replace(/[\\/]+$/, "");
+    if (!t || /^[a-zA-Z]:$/.test(t)) return "";
+    const parts = t.split(/[\\/]/);
+    return parts[parts.length - 1] ?? "";
+  }, [source]);
+
+  /** 文件实际落盘的位置：目录源 = <目标>\<源目录名>，文件源/盘符根 = 目标本身 */
+  const targetHint = useMemo(() => {
+    if (sourceIsFile || !sourceBase || !dest.trim()) return "";
+    const d = dest.replace(/[\\/]+$/, "");
+    return d ? `${d}\\${sourceBase}` : sourceBase;
+  }, [sourceIsFile, sourceBase, dest]);
 
   useEffect(() => {
     api.listDrives().then(setDrives).catch((e) => console.error(e));
@@ -71,7 +90,7 @@ export function TaskEditor({ initial, defaultOptions, onClose, onSaved }: TaskEd
     return () => window.clearTimeout(checkTimer.current);
   }, [source, dest]);
 
-  // 源目录估算：800ms 防抖自动触发
+  // 源大小估算：800ms 防抖自动触发（源可以是目录或单个文件）
   useEffect(() => {
     if (!source.trim()) {
       setEstimate(null);
@@ -87,6 +106,13 @@ export function TaskEditor({ initial, defaultOptions, onClose, onSaved }: TaskEd
     return () => window.clearTimeout(estTimer.current);
   }, [source]);
 
+  // 源是单个文件时，镜像 /MIR 无意义：把已勾选的镜像复位
+  useEffect(() => {
+    if (sourceIsFile && options.mirror) {
+      setOptions((o) => ({ ...o, mirror: false }));
+    }
+  }, [sourceIsFile, options.mirror]);
+
   // 命令行预览：300ms 防抖
   useEffect(() => {
     window.clearTimeout(cmdTimer.current);
@@ -100,12 +126,20 @@ export function TaskEditor({ initial, defaultOptions, onClose, onSaved }: TaskEd
     return () => window.clearTimeout(cmdTimer.current);
   }, [draft]);
 
-  const browse = (which: "src" | "dst") => {
+  const browseFolder = (which: "src" | "dst") => {
     api.pickFolder().then((p) => {
       if (!p) return;
       const path = p.replace(/\//g, "\\").replace(/\\+$/, "") + "\\";
       if (which === "src") setSource(path);
       else setDest(path);
+    });
+  };
+
+  // 源支持单个文件：选中文件后填入完整路径（不加尾分隔符）
+  const browseFile = () => {
+    api.pickFile().then((p) => {
+      if (!p) return;
+      setSource(p.replace(/\//g, "\\"));
     });
   };
 
@@ -116,17 +150,20 @@ export function TaskEditor({ initial, defaultOptions, onClose, onSaved }: TaskEd
   };
 
   const doSave = () => {
-    onSaved(draft, options);
+    // 单文件源没有镜像语义：任务上强制关闭镜像；但不改动用户的默认参数
+    const finalOptions = sourceIsFile ? { ...options, mirror: false } : options;
+    const finalTask = sourceIsFile ? { ...draft, options: finalOptions } : draft;
+    onSaved(finalTask, options);
     onClose();
   };
 
   const trySave = () => {
     if (!relation || relation !== "ok") {
       const rel = relation ?? "empty";
-      toast("error", `任务保存失败：${RELATION_MESSAGES[rel] || "请填写源目录与目标目录"}`);
+      toast("error", `任务保存失败：${RELATION_MESSAGES[rel] || "请填写源路径与目标目录"}`);
       return;
     }
-    if (options.mirror && initial === null) {
+    if (options.mirror && !sourceIsFile && initial === null) {
       setMirConfirm(true);
       return;
     }
@@ -141,23 +178,31 @@ export function TaskEditor({ initial, defaultOptions, onClose, onSaved }: TaskEd
         <div className="flex max-h-[78vh] flex-col overflow-y-auto p-5">
           <h2 className="mb-4 text-sm font-semibold text-foreground">编辑复制任务</h2>
 
-          {/* 源目录 */}
+          {/* 源路径（目录或单个文件） */}
           <div className="flex flex-col gap-3">
             <div className="flex items-center gap-2.5">
-              <label className="w-[64px] shrink-0 text-[13px] text-[#64748B]">源目录</label>
+              <label className="w-[64px] shrink-0 text-[13px] text-[#64748B]">源路径</label>
               <input
                 className={FIELD}
                 value={source}
                 onChange={(e) => setSource(e.target.value)}
-                placeholder="D:\\照片\\2024"
+                placeholder="D:\\照片\\2024  或  D:\\照片\\视频.mp4"
                 spellCheck={false}
               />
               <button
                 type="button"
-                onClick={() => browse("src")}
+                onClick={() => browseFolder("src")}
                 className="h-[30px] shrink-0 rounded-md border border-border bg-surface px-3 text-xs text-foreground transition-colors hover:bg-surfaceAlt"
               >
-                浏览…
+                浏览目录…
+              </button>
+              <button
+                type="button"
+                onClick={browseFile}
+                title="选择单个文件进行复制"
+                className="h-[30px] shrink-0 rounded-md border border-border bg-surface px-3 text-xs text-foreground transition-colors hover:bg-surfaceAlt"
+              >
+                浏览文件…
               </button>
             </div>
 
@@ -167,7 +212,7 @@ export function TaskEditor({ initial, defaultOptions, onClose, onSaved }: TaskEd
                 className={FIELD}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="可选；留空时自动使用源目录名"
+                placeholder="可选；留空时自动使用源名称"
                 spellCheck={false}
               />
             </div>
@@ -183,10 +228,10 @@ export function TaskEditor({ initial, defaultOptions, onClose, onSaved }: TaskEd
               />
               <button
                 type="button"
-                onClick={() => browse("dst")}
+                onClick={() => browseFolder("dst")}
                 className="h-[30px] shrink-0 rounded-md border border-border bg-surface px-3 text-xs text-foreground transition-colors hover:bg-surfaceAlt"
               >
-                浏览…
+                浏览目录…
               </button>
               <select
                 value=""
@@ -209,24 +254,37 @@ export function TaskEditor({ initial, defaultOptions, onClose, onSaved }: TaskEd
             {relation === null ? (
               <span className="text-[#94A3B8]">填写路径后自动校验合法性</span>
             ) : relationOk ? (
-              <span className="text-[#10B981]">校验通过 ✓</span>
+              <span className="text-[#10B981]">
+                校验通过 ✓{sourceIsFile && "（源为单个文件）"}
+              </span>
             ) : (
               <span className="text-[#EF4444]">{RELATION_MESSAGES[relation]}</span>
             )}
           </div>
 
+          {/* 目录源会在目标下新建同名子目录，明确告知实际落盘位置 */}
+          {relationOk && targetHint && (
+            <div className="mt-1 text-xs text-[#64748B]">
+              目录将整体复制到：
+              <span className="ml-1 font-mono text-[#2563EB]">{targetHint}</span>
+            </div>
+          )}
+
           {/* 源估算 + 目标盘空间 */}
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-surfaceAlt px-3 py-2.5 text-xs">
             {estimate ? (
               <span className="text-[#64748B]">
-                源目录：{estimate.files} 个文件 / {estimate.dirs} 个目录，合计{" "}
+                {estimate.is_file
+                  ? "源文件"
+                  : `源目录：${estimate.files} 个文件 / ${estimate.dirs} 个目录`}
+                ，合计{" "}
                 <span className="font-mono text-[#2563EB]">
                   {humanBytes(estimate.total_bytes)}
                 </span>
               </span>
             ) : (
               <span className="text-[#94A3B8]">
-                {source.trim() ? "正在估算源目录大小…" : "填写源目录后自动估算大小"}
+                {source.trim() ? "正在估算源大小…" : "填写源路径后自动估算大小"}
               </span>
             )}
             <button
@@ -260,7 +318,7 @@ export function TaskEditor({ initial, defaultOptions, onClose, onSaved }: TaskEd
 
           {/* 复制参数 */}
           <div className="mt-4">
-            <OptionsPanel value={options} onChange={setOptions} />
+            <OptionsPanel value={options} onChange={setOptions} mirrorDisabled={sourceIsFile} />
           </div>
 
           {/* 命令行预览 */}
@@ -271,7 +329,9 @@ export function TaskEditor({ initial, defaultOptions, onClose, onSaved }: TaskEd
           )}
 
           <p className="mt-3 text-[11px] leading-relaxed text-[#94A3B8]">
-            提示：本工具直接调用系统 robocopy 完成；勾选「镜像 /MIR」会删除目标端多余文件，请谨慎使用。
+            提示：源可以是整个目录，也可以是单个文件。目录会整体复制到目标目录下并新建同名子目录；
+            单个文件则直接复制进目标目录、文件名不变。本工具直接调用系统 robocopy 完成；
+            勾选「镜像 /MIR」会删除目标端多余文件，请谨慎使用。
           </p>
 
           <div className="mt-4 flex justify-end gap-2.5">

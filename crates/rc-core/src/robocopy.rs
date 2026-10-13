@@ -66,11 +66,40 @@ fn clean_dir(path: &str) -> String {
 
 /// 构造 robocopy 命令行（列表形式，引号转义由 [`list_to_command_line`] / OS 处理）。
 ///
+/// 源可以是目录，也可以是**单个文件**：
+/// - 目录：`robocopy <源> <目标>\<源目录名> /E|/MIR …`（把源目录整体建到目标里，
+///   目标端出现与源同名的子目录）；
+/// - 单文件：`robocopy <父目录> <目标> <文件名> …`（文件名作为过滤条件，文件直接放进
+///   目标目录）；单文件没有递归 / 镜像语义，因此**不带** `/E` 与 `/MIR`。
+///
 /// 固定使用「安静模式 + 精确字节」参数，并默认加 /XJ 避免跟随联接点造成递归。
 pub fn build_command(source: &str, dest: &str, options: &CopyOptions) -> Vec<String> {
     let opts = options.normalized();
     let exe = winfs::robocopy_path().unwrap_or_else(|| "robocopy".to_string());
-    let mut cmd = vec![exe, clean_dir(source), clean_dir(dest)];
+
+    // 单文件模式：源用父目录 + 文件名作过滤条件
+    if let Some((parent, file_name)) = winfs::split_file_source(source) {
+        let mut cmd = vec![exe, clean_dir(&parent), clean_dir(dest), file_name];
+        cmd.push("/XJ".into());
+        cmd.push(format!("/MT:{}", opts.threads));
+        cmd.push("/COPY:DAT".into());
+        cmd.push(format!("/R:{}", opts.retries));
+        cmd.push(format!("/W:{}", opts.wait_seconds));
+        cmd.push("/BYTES".into());
+        cmd.push("/NP".into());
+        cmd.push("/NDL".into());
+        if opts.restartable {
+            cmd.push("/Z".into());
+        }
+        if opts.dry_run {
+            cmd.push("/L".into());
+        }
+        return cmd;
+    }
+
+    // 目录模式：把源目录整体建到目标目录下（<目标>\<源目录名>）
+    let target = winfs::effective_dest_root(source, dest);
+    let mut cmd = vec![exe, clean_dir(source), clean_dir(&target)];
 
     // 复制范围
     cmd.push(if opts.mirror { "/MIR".into() } else { "/E".into() });
@@ -531,7 +560,8 @@ mod tests {
             exe
         );
         assert_eq!(cmd[1], "C:\\src");
-        assert_eq!(cmd[2], "D:\\dst");
+        // 目录源整体建到目标下：目标端为 D:\dst\src
+        assert_eq!(cmd[2], "D:\\dst\\src");
         assert!(cmd.contains(&"/E".to_string()));
         assert!(cmd.contains(&"/XJ".to_string()));
         assert!(cmd.contains(&"/MT:16".to_string()));
@@ -560,6 +590,18 @@ mod tests {
     }
 
     #[test]
+    fn build_command_dir_source_creates_named_subdir() {
+        let cmd = build_command("D:\\photos\\2024", "E:\\backup", &CopyOptions::default());
+        assert_eq!(cmd[1], "D:\\photos\\2024");
+        assert_eq!(cmd[2], "E:\\backup\\2024");
+        assert!(cmd.contains(&"/E".to_string()));
+
+        // 盘符根作源（无目录名）：目标目录保持原样
+        let root = build_command("D:\\", "E:\\backup", &CopyOptions::default());
+        assert_eq!(root[2], "E:\\backup");
+    }
+
+    #[test]
     fn build_command_clamps_and_cleans_paths() {
         let mut o = CopyOptions::default();
         o.threads = 999;
@@ -567,7 +609,7 @@ mod tests {
         o.wait_seconds = 999;
         let cmd = build_command("C:/a b/x/", "D:\\dst", &o);
         assert_eq!(cmd[1], "C:\\a b\\x"); // / → \，去尾分隔符
-        assert_eq!(cmd[2], "D:\\dst");
+        assert_eq!(cmd[2], "D:\\dst\\x"); // 目录源：目标下新建同名子目录
         assert!(cmd.contains(&"/MT:128".to_string()));
         assert!(cmd.contains(&"/R:20".to_string()));
         assert!(cmd.contains(&"/W:120".to_string()));
@@ -587,6 +629,44 @@ mod tests {
         assert!(p.starts_with('"') || !p.contains(' ') || p.contains("\"C:\\my data\""));
         assert!(p.contains("robocopy"));
         assert!(p.contains("/E"));
+    }
+
+    #[test]
+    fn build_command_single_file_uses_parent_and_filename() {
+        let base = std::env::temp_dir();
+        let dir = base.join(format!("rc_cmd_file_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a b.txt");
+        std::fs::write(&file, "x").unwrap();
+
+        // 即便用户勾了镜像，单文件也不得带 /MIR（没有镜像 / 递归语义）
+        let opts = CopyOptions {
+            mirror: true,
+            ..Default::default()
+        };
+        let cmd = build_command(&file.to_string_lossy(), "D:\\out", &opts);
+
+        // [0]=exe, [1]=父目录, [2]=目标, [3]=文件名过滤条件
+        assert_eq!(
+            cmd[1].to_lowercase(),
+            dir.to_string_lossy().to_lowercase()
+        );
+        assert_eq!(cmd[2], "D:\\out");
+        assert_eq!(cmd[3], "a b.txt");
+        assert!(
+            !cmd.iter().any(|a| a == "/E" || a == "/MIR"),
+            "单文件不应带 /E 或 /MIR：{:?}",
+            cmd
+        );
+        // 含空格的文件名渲染成可粘贴命令行时必须加引号
+        let line = list_to_command_line(&cmd);
+        assert!(line.contains("\"a b.txt\""), "{}", line);
+
+        // 目录源仍走原有 /E 模式，不受影响
+        let dir_cmd = build_command(&dir.to_string_lossy(), "D:\\out", &CopyOptions::default());
+        assert!(dir_cmd.contains(&"/E".to_string()));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -695,7 +775,7 @@ mod tests {
         let mut lines = Vec::new();
         let pid_holder = std::sync::Mutex::new(0u32);
         {
-            let mut sink = std::sync::Mutex::new(&mut lines);
+            let sink = std::sync::Mutex::new(&mut lines);
             let reg = |pid: u32| *pid_holder.lock().unwrap() = pid;
             let rc = run_robocopy(
                 &cmd,
