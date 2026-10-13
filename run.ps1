@@ -68,7 +68,7 @@ Ensure-Icon
 if ($Release) {
     $exe = Join-Path $root "target\release\robocopy-gui.exe"
     if (-not (Test-Path $exe)) {
-        throw "未找到 release 产物：$exe`n请先执行 .\build.ps1 打包。"
+        throw "未找到 release 产物：$exe`n请先执行 .\scripts\build.ps1 打包。"
     }
     Write-Step "启动 release 版本"
     Write-Ok $exe

@@ -6,16 +6,17 @@
 .DESCRIPTION
   依次执行：工具链检查 → 图标检查 → npm 依赖安装 → rc-core 单元测试
   → 前端类型检查与构建 → Tauri 打包（NSIS）。最后打印产物路径与大小。
+  脚本位于 scripts\ 下，项目根 = 本脚本所在目录的上一级。
 
 .EXAMPLE
-  .\build.ps1                        # 完整流程（含单元测试）
-  .\build.ps1 -SkipTest              # 跳过单元测试，快速出包
-  .\build.ps1 -SkipTest -NoBundle    # 只编译 exe，不打安装包（更快）
-  .\build.ps1 -Registry http://nexus.local.com:8081/repository/npm-proxy
+  .\scripts\build.ps1                        # 完整流程（含单元测试）
+  .\scripts\build.ps1 -SkipTest              # 跳过单元测试，快速出包
+  .\scripts\build.ps1 -SkipTest -NoBundle    # 只编译 exe，不打安装包（更快）
+  .\scripts\build.ps1 -Registry http://nexus.local.com:8081/repository/npm-proxy
 
 .NOTES
   若提示「禁止运行脚本」，请改用：
-    powershell -ExecutionPolicy Bypass -File .\build.ps1
+    powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
 #>
 [CmdletBinding()]
 param(
@@ -30,7 +31,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$root = $PSScriptRoot
+# 脚本在 scripts\ 下，项目根为其上一级
+$root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 $started = Get-Date
 
@@ -97,7 +99,7 @@ else {
     if ($LASTEXITCODE -ne 0) {
         # NSIS 需要联网从 GitHub 下载，内网/代理环境经常超时；exe 本身已产出
         Write-Warn2 "Tauri 打包未全部完成（NSIS 安装包需联网下载，内网通常失败）。"
-        Write-Warn2 "只需可执行文件时请改用： .\build.ps1 -NoBundle"
+        Write-Warn2 "只需可执行文件时请改用： .\scripts\build.ps1 -NoBundle"
     }
     else {
         Write-Ok "安装包生成完成"

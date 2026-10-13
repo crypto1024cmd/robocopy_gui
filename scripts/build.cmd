@@ -1,9 +1,10 @@
 @echo off
 rem ============================================================
 rem  RoboCopy GUI - build wrapper (ASCII-safe, double-clickable)
+rem  lives in scripts\ next to build.ps1 (project root = parent dir)
 rem  - prefers PowerShell 7 (pwsh), falls back to Windows PowerShell 5.1
 rem  - auto-fixes UTF-8 BOM on build.ps1 so PS 5.1 reads Chinese text correctly
-rem  - passes through arguments, e.g.:  build.cmd -SkipTest -NoBundle
+rem  - passes through arguments, e.g.:  scripts\build.cmd -SkipTest -NoBundle
 rem ============================================================
 setlocal
 cd /d "%~dp0"

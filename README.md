@@ -36,7 +36,8 @@
 │           └── engine.rs   #   调度线程 + worker + 进度轮询 + 日志节流落盘
 ├── src-tauri/              # Tauri bin：command 桥接 + 事件泵（唯一 UI 推送出口）
 ├── ui/                     # 前端：Vite + React + TS + Tailwind
-├── build.ps1 / run.ps1     # 打包 / 启动脚本（.cmd 为双击包装层）
+├── scripts/                # 打包脚本：build.ps1 / build.cmd（.cmd 为双击包装层）
+├── run.ps1 / run.cmd       # 启动脚本（.cmd 为双击包装层）
 └── logs/                   # 运行产物：每次执行的完整日志（已 gitignore）
 ```
 
@@ -55,13 +56,15 @@
 .\run.cmd -Release        # 直接运行已打包的 release 版本
 .\run.cmd -Install        # 强制重装依赖后启动
 
-.\build.cmd                          # 完整打包（含单元测试；生成 exe + NSIS 安装包）
-.\build.cmd -SkipTest -NoBundle       # 快速出包：跳过测试、只产 exe（内网推荐）
-.\build.cmd -Registry http://nexus.local.com:8081/repository/npm-proxy
+.\scripts\build.cmd                          # 完整打包（含单元测试；生成 exe + NSIS 安装包）
+.\scripts\build.cmd -SkipTest -NoBundle       # 快速出包：跳过测试、只产 exe（内网推荐）
+.\scripts\build.cmd -Registry http://nexus.local.com:8081/repository/npm-proxy
 ```
 
 `.cmd` 只是包装层（自动选用 pwsh、自动补 UTF-8 BOM、绕过执行策略），
-也可以直接调用 PowerShell 脚本：`.\build.ps1 -SkipTest -NoBundle`。
+也可以直接调用 PowerShell 脚本：`.\scripts\build.ps1 -SkipTest -NoBundle`。
+打包脚本本身位于 `scripts/`，运行时会把工作目录切回项目根，
+产物路径与手动命令一致（见下方「产物位置」）。
 
 > 注意：npm 默认走内网 registry 时可能 502，脚本默认使用官方源，
 > 可用 `-Registry` 覆盖。

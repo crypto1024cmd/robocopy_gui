@@ -46,7 +46,8 @@ Agent 在采取任何可能影响这些约定的动作前，请先通读一遍�
 │       ├── App.tsx            #   装配：状态管理、事件订阅、日志缓冲、对话框调度
 │       ├── components/        #   TopBar/TaskCard/RuntimePanel/LogConsole/… + ui/ 基础件
 │       └── dialogs/           #   TaskEditor/CommandPreview/LogViewer/SettingsDialog
-├── build.ps1 / run.ps1        # 打包 / 启动脚本（.cmd 为双击包装层）
+├── scripts/                   # 打包脚本：build.ps1 / build.cmd（.cmd 为双击包装层）
+├── run.ps1 / run.cmd          # 启动脚本（.cmd 为双击包装层）
 └── logs/                      # 运行产物：每次执行的完整日志（已 gitignore）
 ```
 
@@ -146,7 +147,9 @@ Agent 在采取任何可能影响这些约定的动作前，请先通读一遍�
 - 端到端手工路径：建任务 → 跑小目录 → 检查 `logs/` 落盘、进度、校验差异、
   停止与退出清理。
 - Windows 特有行为（UNC、跨盘符、长路径）若改了 `winfs.rs`，要跑一次小样本验证。
-- 一键脚本：`.\build.ps1 -SkipTest -NoBundle`（快速出 exe）。
+- 一键脚本：`.\scripts\build.ps1 -SkipTest -NoBundle`（快速出 exe）；
+  打包脚本在 `scripts/` 下，用 `Split-Path -Parent $PSScriptRoot` 定位项目根，
+  改动脚本时不要退回 `$PSScriptRoot` 当根目录。
 
 ## 9. 提交与风格
 
